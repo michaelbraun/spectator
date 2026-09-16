@@ -24,19 +24,17 @@ import java.util.Optional;
  * patterns then regular expressions are a better option though it will likely come with a
  * steep performance penalty.
  *
- * <p>The 128 ascii characters are stored as a pair of 64-bit words held directly in the object
- * rather than as a {@code boolean[]}. A membership test is then a shift and a mask instead of a
- * pointer dereference plus an array load, and the set operations, equality, and emptiness checks
- * become a couple of instructions rather than a loop over 128 elements.</p>
+ * <p>The 128 ascii characters are stored as a pair of 64-bit words rather than a
+ * {@code boolean[]}, so membership tests and set operations are a few ALU ops instead of an
+ * array walk.</p>
  *
  * <p><b>This class is an internal implementation detail only intended for use within spectator.
  * It is subject to change without notice.</b></p>
  */
 public final class AsciiSet implements Serializable {
 
-  // Bumped when the members array was replaced by the word pair. Java serialization matches
-  // fields by name, so leaving this at 1 would let a stream written by an older version
-  // deserialize into a silently empty set instead of failing.
+  // Bumped from 1: the array field was replaced by two longs, and serialization matches by
+  // field name, so an old stream would otherwise deserialize into a silently empty set.
   private static final long serialVersionUID = 2L;
 
   /** Throws if {@code c} is outside of ascii; used while building a set from a pattern. */
@@ -59,10 +57,8 @@ public final class AsciiSet implements Serializable {
    *     Set containing the characters specified in {@code pattern}.
    */
   public static AsciiSet fromPattern(String pattern) {
-    // Built as two locals rather than a long[2], as in the constructor below: a two element
-    // array indexed by a value computed at runtime (c >>> 6) is not a compile time constant
-    // index, which keeps C2 from scalar replacing it, so the array is a real, if short-lived,
-    // heap allocation on every call. Two locals have no such array to allocate.
+    // Two locals, not a long[2]: an array indexed by a runtime value (c >>> 6) isn't scalar
+    // replaced by the JIT, so it would allocate on every call (see AsciiSetBench.fromPattern_*).
     long b0 = 0L;
     long b1 = 0L;
     final int n = pattern.length();
@@ -92,6 +88,7 @@ public final class AsciiSet implements Serializable {
 
   /** Returns a set that matches all ascii characters. */
   public static AsciiSet all() {
+    // -1L has every bit set, so both words match every character.
     return new AsciiSet(-1L, -1L);
   }
 
@@ -112,12 +109,17 @@ public final class AsciiSet implements Serializable {
    * is not. Characters outside of ascii are never members.
    *
    * <p>Takes the words as arguments rather than reading the fields so that callers scanning a
-   * string can hoist them out of the loop.</p>
+   * string can hoist them out of the loop. Returns the raw bit rather than a boolean: measured
+   * faster in {@code containsAll} (a boolean-returning version cost 15-35% throughput there)
+   * even though this is a small, fully inlined method where that shouldn't matter in theory.</p>
    */
   private static long memberBit(long b0, long b1, char c) {
-    // Both selects compile to conditional moves, so neither adds a branch to mispredict.
     final long word = (c < 64) ? b0 : b1;
-    // The shift distance is masked to the low 6 bits, which is the index within the word.
+    // Relies on JLS 15.19: a long shift masks its distance to the low 6 bits, so `c` correctly
+    // selects the bit within whichever word was chosen even though c can be up to 127. Do not
+    // make that masking explicit (`c & 0x3F`): x86's shrx already masks the count in hardware,
+    // so the explicit version compiles to a genuinely redundant andl per character and measured
+    // 15-35% slower in containsAll (confirmed with -XX:+PrintAssembly; verify there if changing).
     return (c < 128) ? ((word >>> c) & 1L) : 0L;
   }
 
@@ -163,10 +165,8 @@ public final class AsciiSet implements Serializable {
   private final long bits1;
 
   /**
-   * Cached pattern for {@link #toString()}. Computed on demand as the parser builds a large
-   * number of intermediate sets, via {@link #union(AsciiSet)} and friends, whose pattern is
-   * never rendered. Not part of the identity of the set, so it is left out of equals and
-   * hashCode and is recomputed after deserialization.
+   * Cached, lazily computed pattern for {@link #toString()}; excluded from equals/hashCode and
+   * from serialization since it's fully derived from {@link #bits0}/{@link #bits1}.
    */
   private transient String pattern;
 
@@ -187,10 +187,8 @@ public final class AsciiSet implements Serializable {
    * Returns true if all characters in the string are contained within the set.
    */
   public boolean containsAll(CharSequence str) {
-    // The words are hoisted so the loop does not reload them through the object on every
-    // character. Testing and exiting per character beats accumulating a batch of characters
-    // before branching: on the input this sees the branch is almost perfectly predicted, so
-    // batching only adds work and lengthens the dependency chain.
+    // Testing and exiting per character measured faster than batching several characters
+    // before branching: the branch is well predicted on real input, so batching only adds work.
     final long b0 = bits0;
     final long b1 = bits1;
     final int n = str.length();
@@ -262,17 +260,15 @@ public final class AsciiSet implements Serializable {
     final long b0 = bits0;
     final long b1 = bits1;
 
-    // Everything written here is ascii, so the result could be built as a byte[] and handed to
-    // the ISO-8859-1 String constructor, which would allocate a third less. It measures slower:
-    // toCharArray is an intrinsic bulk copy and the compress back down in new String(char[]) is
-    // one too, and together they beat filling a byte[] a character at a time.
+    // A byte[] decoded as ISO-8859-1 would allocate a third less (everything here is ascii) but
+    // measured slower: toCharArray/new String(char[]) are bulk-copy intrinsics that beat filling
+    // a byte[] one character at a time.
     final char[] buf = input.toCharArray();
     final int n = buf.length;
     buf[start] = replacement;
     for (int i = start + 1; i < n; ++i) {
-      // Read the character from the input rather than back out of buf. Loading from the same
-      // array that is being stored into makes each load depend on the preceding store, and it
-      // measures slower than going through the string despite the extra indirection.
+      // Reads from input, not buf: reading the array being written creates a store-to-load
+      // dependency that measured slower despite the extra indirection through the string.
       if (memberBit(b0, b1, input.charAt(i)) == 0L) {
         buf[i] = replacement;
       }
@@ -302,8 +298,8 @@ public final class AsciiSet implements Serializable {
   @Override public String toString() {
     String p = pattern;
     if (p == null) {
-      // Benign race: the pattern is derived purely from the immutable bits, so concurrent
-      // callers either see the cached value or recompute an identical one.
+      // Benign race: pattern is a pure function of the bits, so a concurrent caller recomputes
+      // the same value rather than seeing a torn or stale one.
       p = toPattern();
       pattern = p;
     }
