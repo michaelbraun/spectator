@@ -168,6 +168,26 @@ public class AtlasRegistryTest {
   }
 
   @Test
+  public void invalidCharactersFixedWhenLaterTagIsDirty() {
+    // Several clean tags followed by one dirty tag: normalizeTags confirms the earlier tags are
+    // clean before it finds the dirty one, so this exercises reusing them as is rather than
+    // rebuilding them again, alongside the one that actually needs fixing.
+    Id id = registry.createId("test")
+        .withTag("a", "1")
+        .withTag("b", "2")
+        .withTag("c", "3")
+        .withTag("d", "/api/v1");
+    registry.counter(id).increment();
+    List<Measurement> ms = getMeasurements();
+    Assertions.assertEquals(1, ms.size());
+    Id fixed = ms.get(0).id();
+    Assertions.assertEquals("1", tagValue(fixed, "a"));
+    Assertions.assertEquals("2", tagValue(fixed, "b"));
+    Assertions.assertEquals("3", tagValue(fixed, "c"));
+    Assertions.assertEquals("_api_v1", tagValue(fixed, "d"));
+  }
+
+  @Test
   public void invalidCharactersShareMeter() {
     // Two ids that only differ by invalid characters map to the same meter once fixed, so they
     // produce a single series rather than colliding as two separate series downstream.

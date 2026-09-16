@@ -482,19 +482,27 @@ public final class AtlasRegistry extends AbstractRegistry {
 
     // Detect whether any characters need to be fixed without allocating. containsAll scans and
     // short circuits on the first invalid character, so the common case where everything is
-    // already valid returns the original id as is.
-    boolean changed = !allowed.containsAll(id.name());
-    if (!changed) {
+    // already valid returns the original id as is. This scan only runs when the name is clean:
+    // if the name itself is already dirty every tag gets rebuilt below regardless, so checking
+    // them here first would just scan them twice for nothing.
+    final boolean nameOk = allowed.containsAll(id.name());
+
+    // Index of the first tag pair (1-based, matching id.getKey/getValue) known to still need
+    // fixing. Tags before it were already confirmed clean by the scan below and are reused as
+    // is; rebuilding them via replaceNonMembers would repeat a scan this method just did. Starts
+    // at 0 when the name is already dirty, so every tag below is rebuilt unconditionally, since
+    // the scan that would normally narrow this down did not run.
+    int firstDirtyTag = nameOk ? size : 0;
+    if (nameOk) {
       for (int i = 1; i < size; ++i) {
         if (!allowed.containsAll(id.getKey(i)) || !allowed.containsAll(id.getValue(i))) {
-          changed = true;
+          firstDirtyTag = i;
           break;
         }
       }
-    }
-
-    if (!changed) {
-      return id;
+      if (firstDirtyTag == size) {
+        return id;
+      }
     }
 
     // Fixing a tag key can change the ordering or introduce duplicate keys, so unsafeCreate is
@@ -502,9 +510,15 @@ public final class AtlasRegistry extends AbstractRegistry {
     final String[] tags = new String[2 * (size - 1)];
     int pos = 0;
     for (int i = 1; i < size; ++i) {
-      tags[pos++] = allowed.replaceNonMembers(id.getKey(i), '_');
-      tags[pos++] = allowed.replaceNonMembers(id.getValue(i), '_');
+      if (i < firstDirtyTag) {
+        tags[pos++] = id.getKey(i);
+        tags[pos++] = id.getValue(i);
+      } else {
+        tags[pos++] = allowed.replaceNonMembers(id.getKey(i), '_');
+        tags[pos++] = allowed.replaceNonMembers(id.getValue(i), '_');
+      }
     }
-    return Id.unsafeCreate(allowed.replaceNonMembers(id.name(), '_'), tags, tags.length);
+    final String name = nameOk ? id.name() : allowed.replaceNonMembers(id.name(), '_');
+    return Id.unsafeCreate(name, tags, tags.length);
   }
 }
