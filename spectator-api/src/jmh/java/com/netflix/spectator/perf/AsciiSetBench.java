@@ -179,12 +179,80 @@ public class AsciiSetBench {
   /** A value that needs fixing from the very first character. */
   private String dirtyEarly;
 
+  /** Text to build a set from, kept separate from {@code VALID} for the same reason as above. */
+  private String patternText;
+
   @Setup
   public void setup() {
     shortClean = new String("us-east-1c".toCharArray());
     longClean = new String("ipc.server.call.duration.percentile".toCharArray());
     dirtyLate = new String("spinnaker.prod.us-east-1/cluster".toCharArray());
     dirtyEarly = new String("/api/v1/users?id=42&name=bob".toCharArray());
+    patternText = new String(VALID.toCharArray());
+  }
+
+  /**
+   * Sets the bit for {@code c} in a two element word array, the way {@code AsciiSet.fromPattern}
+   * used to before it switched to two locals. The array is indexed by {@code c >>> 6}, a value
+   * only known at runtime, and that keeps C2 from scalar replacing it: the array is a real,
+   * short-lived heap allocation on every call, for no benefit over just using two locals.
+   */
+  private static void setArrayWord(long[] words, char c) {
+    words[c >>> 6] |= 1L << c;
+  }
+
+  private static long[] fromPatternArray(String pattern) {
+    final long[] words = new long[2];
+    final int n = pattern.length();
+    for (int i = 0; i < n; ++i) {
+      final char c = pattern.charAt(i);
+      final boolean isStartOrEnd = i == 0 || i == n - 1;
+      if (isStartOrEnd || c != '-') {
+        setArrayWord(words, c);
+      } else {
+        final char s = pattern.charAt(i - 1);
+        final char e = pattern.charAt(i + 1);
+        for (char v = s; v <= e; ++v) {
+          setArrayWord(words, v);
+        }
+      }
+    }
+    return words;
+  }
+
+  /** Same computation as {@link #fromPatternArray}, but through two locals instead of an array. */
+  private static long fromPatternScalar(String pattern) {
+    long b0 = 0L;
+    long b1 = 0L;
+    final int n = pattern.length();
+    for (int i = 0; i < n; ++i) {
+      final char c = pattern.charAt(i);
+      final boolean isStartOrEnd = i == 0 || i == n - 1;
+      if (isStartOrEnd || c != '-') {
+        if (c < 64) b0 |= 1L << c; else b1 |= 1L << c;
+      } else {
+        final char s = pattern.charAt(i - 1);
+        final char e = pattern.charAt(i + 1);
+        for (char v = s; v <= e; ++v) {
+          if (v < 64) b0 |= 1L << v; else b1 |= 1L << v;
+        }
+      }
+    }
+    return b0 ^ b1;
+  }
+
+  // Construction cost only, with no final AsciiSet built on either side: the long[2] above,
+  // indexed by a value known only at runtime, versus the two locals AsciiSet.fromPattern
+  // actually uses. Building the AsciiSet itself would allocate the same object either way and
+  // wash out the difference this is meant to isolate.
+
+  @Benchmark public long fromPattern_array() {
+    final long[] words = fromPatternArray(patternText);
+    return words[0] ^ words[1];
+  }
+
+  @Benchmark public long fromPattern_scalar() {
+    return fromPatternScalar(patternText);
   }
 
   // containsAll on already valid input: the dominant case on the meter lookup path.

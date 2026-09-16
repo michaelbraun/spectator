@@ -39,13 +39,11 @@ public final class AsciiSet implements Serializable {
   // deserialize into a silently empty set instead of failing.
   private static final long serialVersionUID = 2L;
 
-  /** Sets the bit for {@code c} in a two element word array, validating that it is ascii. */
-  private static void set(long[] words, char c) {
+  /** Throws if {@code c} is outside of ascii; used while building a set from a pattern. */
+  private static void checkAscii(char c) {
     if (c >= 128) {
       throw new IllegalArgumentException("invalid pattern, '" + c + "' is not ascii");
     }
-    // The shift distance is masked to the low 6 bits, so it indexes within the selected word.
-    words[c >>> 6] |= 1L << c;
   }
 
   /**
@@ -61,23 +59,30 @@ public final class AsciiSet implements Serializable {
    *     Set containing the characters specified in {@code pattern}.
    */
   public static AsciiSet fromPattern(String pattern) {
-    final long[] words = new long[2];
+    // Built as two locals rather than a long[2], as in the constructor below: a two element
+    // array indexed by a value computed at runtime (c >>> 6) is not a compile time constant
+    // index, which keeps C2 from scalar replacing it, so the array is a real, if short-lived,
+    // heap allocation on every call. Two locals have no such array to allocate.
+    long b0 = 0L;
+    long b1 = 0L;
     final int n = pattern.length();
     for (int i = 0; i < n; ++i) {
       final char c = pattern.charAt(i);
 
       final boolean isStartOrEnd = i == 0 || i == n - 1;
       if (isStartOrEnd || c != '-') {
-        set(words, c);
+        checkAscii(c);
+        if (c < 64) b0 |= 1L << c; else b1 |= 1L << c;
       } else {
         final char s = pattern.charAt(i - 1);
         final char e = pattern.charAt(i + 1);
         for (char v = s; v <= e; ++v) {
-          set(words, v);
+          checkAscii(v);
+          if (v < 64) b0 |= 1L << v; else b1 |= 1L << v;
         }
       }
     }
-    return new AsciiSet(words[0], words[1]);
+    return new AsciiSet(b0, b1);
   }
 
   /** Returns a set that matches no characters. */
@@ -92,13 +97,14 @@ public final class AsciiSet implements Serializable {
 
   /** Returns a set that matches ascii control characters. */
   public static AsciiSet control() {
-    final long[] words = new long[2];
+    long b0 = 0L;
+    long b1 = 0L;
     for (char c = 0; c < 128; ++c) {
       if (Character.isISOControl(c)) {
-        set(words, c);
+        if (c < 64) b0 |= 1L << c; else b1 |= 1L << c;
       }
     }
-    return new AsciiSet(words[0], words[1]);
+    return new AsciiSet(b0, b1);
   }
 
   /**
