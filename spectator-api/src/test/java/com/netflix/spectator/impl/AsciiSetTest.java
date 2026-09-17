@@ -20,6 +20,9 @@ import nl.jqno.equalsverifier.Warning;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import java.util.HashMap;
+import java.util.Map;
+
 public class AsciiSetTest {
 
   @Test
@@ -160,17 +163,25 @@ public class AsciiSetTest {
   }
 
   @Test
-  public void hashCodeDistinguishesComplementAndHalves() {
+  public void hashCodeDistinctForEverySingleCharacter() {
+    // Exhaustive rather than a few chosen pairs: which pairs collide depends on how the two
+    // words are combined, so a fixed pair stops covering the defect as soon as that changes.
+    Map<Integer, Character> seen = new HashMap<>();
+    for (char c = 0; c < 128; ++c) {
+      Character previous = seen.put(AsciiSet.fromPattern(String.valueOf(c)).hashCode(), c);
+      if (previous != null) {
+        Assertions.fail("chars " + (int) previous.charValue() + " and " + (int) c
+            + " have the same hashCode");
+      }
+    }
+  }
+
+  @Test
+  public void hashCodeDistinguishesSetFromComplement() {
     AsciiSet lower = AsciiSet.fromPattern("a-z");
-    AsciiSet digits = AsciiSet.fromPattern("0-9");
-
     Assertions.assertNotEquals(lower.hashCode(), lower.invert().hashCode());
-    Assertions.assertNotEquals(digits.hashCode(), digits.invert().hashCode());
     Assertions.assertNotEquals(AsciiSet.none().hashCode(), AsciiSet.all().hashCode());
-
-    // Pairs 64 apart share a bit position across the two words.
-    Assertions.assertNotEquals(lower.hashCode(), AsciiSet.fromPattern("A-Z").hashCode());
     Assertions.assertNotEquals(
-        AsciiSet.fromPattern("!").hashCode(), AsciiSet.fromPattern("a").hashCode());
+        lower.hashCode(), AsciiSet.fromPattern("A-Z").hashCode());
   }
 }

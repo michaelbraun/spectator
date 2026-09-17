@@ -269,9 +269,12 @@ public final class AsciiSet implements Serializable {
   }
 
   @Override public int hashCode() {
-    // Long.hashCode xors a value's halves and ~hi ^ ~lo == hi ^ lo, so folding the words
-    // directly would hash every set like its complement. Applied twice so bits1 mixes too.
-    final long h = (bits0 * HASH_MIXER + bits1) * HASH_MIXER;
+    // Folding the words straight through Long.hashCode would hash every set like its
+    // complement, since ~hi ^ ~lo == hi ^ lo. The xor-shift between them is load bearing too:
+    // 2^63 is a fixed point of odd multiplication, so char 63 would hash like char 127.
+    long h = bits0 * HASH_MIXER;
+    h ^= h >>> 32;
+    h = (h + bits1) * HASH_MIXER;
     return (int) (h ^ (h >>> 32));
   }
 
