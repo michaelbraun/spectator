@@ -158,4 +158,19 @@ public class AsciiSetTest {
         .suppress(Warning.NULL_FIELDS)
         .verify();
   }
+
+  @Test
+  public void hashCodeDistinguishesComplementAndHalves() {
+    AsciiSet lower = AsciiSet.fromPattern("a-z");
+    AsciiSet digits = AsciiSet.fromPattern("0-9");
+
+    Assertions.assertNotEquals(lower.hashCode(), lower.invert().hashCode());
+    Assertions.assertNotEquals(digits.hashCode(), digits.invert().hashCode());
+    Assertions.assertNotEquals(AsciiSet.none().hashCode(), AsciiSet.all().hashCode());
+
+    // Pairs 64 apart share a bit position across the two words.
+    Assertions.assertNotEquals(lower.hashCode(), AsciiSet.fromPattern("A-Z").hashCode());
+    Assertions.assertNotEquals(
+        AsciiSet.fromPattern("!").hashCode(), AsciiSet.fromPattern("a").hashCode());
+  }
 }
