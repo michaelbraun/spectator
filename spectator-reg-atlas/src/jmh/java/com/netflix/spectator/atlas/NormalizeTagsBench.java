@@ -48,6 +48,15 @@ public class NormalizeTagsBench {
       .withTag("a", "1").withTag("b", "2").withTag("c", "3").withTag("d", "4")
       .withTag("path", "/api/v1");
 
+  /**
+   * The dirty tag is neither first nor last: earlier tags are confirmed clean and reused, but
+   * later ones were never checked by the detection scan (it breaks at the first dirty tag), so
+   * they still get rescanned by replaceNonMembers below even though they turn out to be clean.
+   */
+  private final Id dirtyMiddleTag = registry.createId("test")
+      .withTag("a", "1").withTag("b", "2").withTag("path", "/api/v1")
+      .withTag("d", "4").withTag("e", "5");
+
   /** The name itself is dirty: no tag detection scan runs either way. */
   private final Id dirtyName = registry.createId("te/st")
       .withTag("a", "1").withTag("b", "2").withTag("c", "3").withTag("d", "4").withTag("e", "5");
@@ -58,6 +67,10 @@ public class NormalizeTagsBench {
 
   @Benchmark public Id dirtyLastTag() {
     return registry.normalizeTags(dirtyLastTag);
+  }
+
+  @Benchmark public Id dirtyMiddleTag() {
+    return registry.normalizeTags(dirtyMiddleTag);
   }
 
   @Benchmark public Id dirtyName() {

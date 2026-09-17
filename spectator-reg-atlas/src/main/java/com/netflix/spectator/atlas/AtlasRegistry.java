@@ -509,11 +509,27 @@ public final class AtlasRegistry extends AbstractRegistry {
     // used as it will re-sort and de-dup the resulting array.
     final String[] tags = new String[2 * (size - 1)];
     int pos = 0;
-    for (int i = 1; i < size; ++i) {
-      if (i < firstDirtyTag) {
-        tags[pos++] = id.getKey(i);
-        tags[pos++] = id.getValue(i);
-      } else {
+    if (nameOk) {
+      // firstDirtyTag is in [1, size); tags before it were confirmed clean above and reused.
+      for (int i = 1; i < size; ++i) {
+        if (i < firstDirtyTag) {
+          tags[pos++] = id.getKey(i);
+          tags[pos++] = id.getValue(i);
+        } else {
+          tags[pos++] = allowed.replaceNonMembers(id.getKey(i), '_');
+          tags[pos++] = allowed.replaceNonMembers(id.getValue(i), '_');
+        }
+      }
+    } else {
+      // The name was already dirty, so the scan above never ran and nothing is known to be
+      // clean; every tag needs fixing. Kept as its own loop, rather than folded into the one
+      // above behind an `i < firstDirtyTag` check that would always be false here, because
+      // that check measurably cost this case throughput despite always taking the same branch.
+      // Splitting it this way also measurably improved the already-valid early-return case
+      // above, which never reaches this code at all; the exact mechanism isn't established
+      // (plausibly something about how the method's overall shape compiles), so treat that as
+      // an empirical result to preserve, not a guarantee, if this is restructured again.
+      for (int i = 1; i < size; ++i) {
         tags[pos++] = allowed.replaceNonMembers(id.getKey(i), '_');
         tags[pos++] = allowed.replaceNonMembers(id.getValue(i), '_');
       }
